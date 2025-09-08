@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>3D Buildings + Boundary + Multiple Base Maps</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet"/>
+<style>
+  body, html { margin:0; padding:0; height:100%; }
+  #map { position:absolute; top:0; bottom:0; width:100%; }
+  #controls {
+    position:absolute; bottom:20px; left:10px; background:rgba(255,255,255,0.9); padding:10px;
+    font-family:Arial,sans-serif; font-size:14px; border-radius:6px; max-width:250px;
+  }
+  #controls label{ display:block; margin-bottom:4px; cursor:pointer; }
+  .legend { margin-top:8px; }
+  .legend .item {display:flex; align-items:center; gap:8px; margin-bottom:2px;}
+  .swatch {width:18px; height:10px; border-radius:2px; display:inline-block;}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="controls">
+  <strong>Base Maps</strong>
+  <label><input type="radio" name="base" value="basic" checked> MapTiler Basic</label>
+  <label><input type="radio" name="base" value="sat"> Satellite (Esri)</label>
+  <label><input type="radio" name="base" value="hill"> Hillshade</label>
+  <label><input type="radio" name="base" value="ortho"> Ortho Image</label>
+  <hr>
+  <strong>Vector Layers</strong>
+  <label><input type="checkbox" id="toggle-boundary" checked> Boundary Walls</label>
+  <label><input type="checkbox" id="toggle-buildings" checked> Buildings</label>
+  <label><input type="checkbox" id="toggle-lines" checked> Lines</label>
+
+  <div class="legend">
+    <strong>Legend</strong>
+    <div class="item"><span class="swatch" style="background:#ff9999"></span> Boundary Wall</div>
+    <div class="item"><span class="swatch" style="background:#c0ffee"></span> Building 3m</div>
+    <div class="item"><span class="swatch" style="background:#a0d0ff"></span> Building 6m</div>
+    <div class="item"><span class="swatch" style="background:#7080ff"></span> Building 9m</div>
+    <div class="item"><span class="swatch" style="background:#4000ff"></span> Building 12m</div>
+    <div class="item"><span class="swatch" style="background:#ff7f0e"></span> NEW TRACK</div>
+    <div class="item"><span class="swatch" style="background:#1f77b4"></span> PDF_BRIDGE</div>
+    <div class="item"><span class="swatch" style="background:#2ca02c"></span> PDF_Railway boundary</div>
+    <div class="item"><span class="swatch" style="background:#d62728"></span> ROAD</div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js"></script>
+<script>
+(async function(){
+  try {
+    const MAPTILER_KEY = 'VTyVRu9eUsVOXeBj5TqJ';
+    const boundaryURL = 'https://raw.githubusercontent.com/hemanya2003/RAILWAY_PROJECT/main/boundary_wall_polygon_wgs84.geojson';
+    const buildingsURL = 'https://raw.githubusercontent.com/hemanya2003/RAILWAY_PROJECT/main/KALIPUR_BUILDINGS_HEIGHT.geojson';
+    const lineURL = 'https://raw.githubusercontent.com/hemanya2003/RAILWAY_PROJECT/main/LINE1.geojson';
+
+    const lineStyleMap = {
+      "NEW TRACK": { color:"#ff7f0e", width:3, dash:[1,0] },
+      "PDF_BRIDGE": { color:"#1f77b4", width:4, dash:[2,1] },
+      "PDF_Railway boundary": { color:"#2ca02c", width:3, dash:[1,1] },
+      "ROAD": { color:"#d62728", width:3, dash:[4,2] }
+    };
+
+    // Map init
+    console.log('Initializing map...');
+    const map = new maplibregl.Map({
+      container:'map',
+      style:`https://api.maptiler.com/maps/basic-v2/style.json?key=${MAPTILER_KEY}`,
+      center:[85.4077,19.8991],
+      zoom:17
+    });
+    
+    map.addControl(new maplibregl.NavigationControl({showCompass:true}), 'top-left');
+    
+    map.on('load', async function() {
+      console.log('Map loaded, adding layers...');
+      
+      try {
+        // Add other raster layers
+        map.addSource('sat',{ type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize:256 });
+        map.addLayer({id:'sat', type:'raster', source:'sat', layout:{visibility:'none'}});
+
+        map.addSource('hill',{ type:'raster', tiles:['https://tile.opentopomap.org/{z}/{x}/{y}.png'], tileSize:256 });
+        map.addLayer({id:'hill', type:'raster', source:'hill', layout:{visibility:'none'}});
+
+        map.addSource('ortho',{
+          type:'raster',
+          tiles:[`https://api.maptiler.com/tiles/01992501-3253-74dd-8b44-413ce3bb259c/{z}/{x}/{y}.webp?key=${MAPTILER_KEY}`],
+          tileSize:256
+        });
+        map.addLayer({id:'ortho', type:'raster', source:'ortho', layout:{visibility:'none'}});
+
+        // ------- VECTOR DATA -------
+        console.log('Loading GeoJSON data...');
+        async function loadGeoJSON(url){ 
+          console.log('Loading:', url);
+          const r = await fetch(url); 
+          if (!r.ok) throw new Error(`Failed to load ${url}: ${r.status}`);
+          return await r.json(); 
+        }
+        
+        const boundaryGeo = await loadGeoJSON(boundaryURL);
+        console.log('Boundary loaded:', boundaryGeo.features.length, 'features');
+        
+        const buildingsGeo = await loadGeoJSON(buildingsURL);
+        console.log('Buildings loaded:', buildingsGeo.features.length, 'features');
+        
+        const lineGeo = await loadGeoJSON(lineURL);
+        console.log('Lines loaded:', lineGeo.features.length, 'features');
+
+        // Boundary walls
+        map.addSource('boundary',{type:'geojson',data:boundaryGeo});
+        map.addLayer({
+          id:'boundary-wall',
+          type:'fill-extrusion',
+          source:'boundary',
+          paint:{
+            'fill-extrusion-height':8,
+            'fill-extrusion-base':0,
+            'fill-extrusion-color':'brown',
+            'fill-extrusion-opacity':1,
+            'fill-extrusion-vertical-gradient':false
+          }
+        });
+        console.log('Boundary layer added');
+
+        // Buildings
+        map.addSource('buildings',{type:'geojson',data:buildingsGeo});
+        map.addLayer({
+          id:'buildings-extrude',
+          type:'fill-extrusion',
+          source:'buildings',
+          paint:{
+            'fill-extrusion-height':['coalesce',['to-number',['get','height_m']],3],
+            'fill-extrusion-base':0,
+            'fill-extrusion-color':[
+              'case',
+              ['<=',['get','height_m'],3],'#c0ffee',
+              ['<=',['get','height_m'],6],'#a0d0ff',
+              ['<=',['get','height_m'],9],'#7080ff',
+              '#4000ff'
+            ],
+            'fill-extrusion-opacity':1,
+            'fill-extrusion-vertical-gradient':false
+          }
+        });
+        console.log('Buildings layer added');
+
+        // Convert lines to thin polygons for 3D stability
+        function lineToPolygon(coordinates, width = 0.000003) {
+          if (coordinates.length < 2) return null;
+          
+          const polygonCoords = [];
+          
+          for (let i = 0; i < coordinates.length - 1; i++) {
+            const [x1, y1] = coordinates[i];
+            const [x2, y2] = coordinates[i + 1];
+            
+            // Calculate perpendicular offset
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const length = Math.sqrt(dx * dx + dy * dy);
+            if (length === 0) continue;
+            
+            const offsetX = (-dy / length) * width;
+            const offsetY = (dx / length) * width;
+            
+            if (i === 0) {
+              polygonCoords.push([x1 + offsetX, y1 + offsetY]);
+              polygonCoords.push([x1 - offsetX, y1 - offsetY]);
+            }
+            
+            polygonCoords.unshift([x2 + offsetX, y2 + offsetY]);
+            polygonCoords.push([x2 - offsetX, y2 - offsetY]);
+          }
+          
+          // Close the polygon
+          polygonCoords.push(polygonCoords[0]);
+          
+          return [polygonCoords];
+        }
+        
+        // Convert lineGeo to polygon features
+        const linePolygons = {
+          type: 'FeatureCollection',
+          features: lineGeo.features.map(feature => {
+            if (feature.geometry.type === 'LineString') {
+              const polygonCoords = lineToPolygon(feature.geometry.coordinates);
+              if (polygonCoords) {
+                return {
+                  ...feature,
+                  geometry: {
+                    type: 'Polygon',
+                    coordinates: polygonCoords
+                  }
+                };
+              }
+            }
+            return feature;
+          }).filter(f => f.geometry.type === 'Polygon')
+        };
+        
+        console.log('Converted', lineGeo.features.length, 'lines to', linePolygons.features.length, 'polygons');
+
+        // Lines as 3D polygons (ground-fixed)
+        map.addSource('lines',{type:'geojson',data:linePolygons});
+        Object.entries(lineStyleMap).forEach(([layerName,style],idx)=>{
+          map.addLayer({
+            id:`line-${idx}`,
+            type:'fill-extrusion',
+            source:'lines',
+            filter:['==',['get','LAYER'],layerName],
+            paint:{
+              'fill-extrusion-height': layerName === 'PDF_BRIDGE' ? 0.8 : 0.1, // Very low height
+              'fill-extrusion-base': 0,
+              'fill-extrusion-color': style.color,
+              'fill-extrusion-opacity': 0.95,
+              'fill-extrusion-vertical-gradient': false
+            }
+          });
+        });
+        console.log('Lines layers added as 3D polygons');
+
+        // ------- LAYER CONTROL -------
+        document.querySelectorAll('input[name="base"]').forEach(radio=>{
+          radio.addEventListener('change',function(){
+            console.log('Switching to base map:', this.value);
+            ['basic','sat','hill','ortho'].forEach(id=>{
+              if (map.getLayer(id)) {
+                map.setLayoutProperty(id,'visibility','none');
+              }
+            });
+            if (map.getLayer(this.value)) {
+              map.setLayoutProperty(this.value,'visibility','visible');
+            }
+          });
+        });
+
+        document.getElementById('toggle-boundary').addEventListener('change',e=>{
+          console.log('Toggle boundary:', e.target.checked);
+          if (map.getLayer('boundary-wall')) {
+            map.setLayoutProperty('boundary-wall','visibility', e.target.checked?'visible':'none');
+          }
+        });
+
+        document.getElementById('toggle-buildings').addEventListener('change',e=>{
+          console.log('Toggle buildings:', e.target.checked);
+          if (map.getLayer('buildings-extrude')) {
+            map.setLayoutProperty('buildings-extrude','visibility', e.target.checked?'visible':'none');
+          }
+        });
+
+        document.getElementById('toggle-lines').addEventListener('change',e=>{
+          console.log('Toggle lines:', e.target.checked);
+          Object.keys(lineStyleMap).forEach((_,i)=>{
+            if (map.getLayer(`line-${i}`)) {
+              map.setLayoutProperty(`line-${i}`,'visibility', e.target.checked?'visible':'none');
+            }
+          });
+        });
+
+        // Fit map to all features
+        function fitToData(features){
+          if (!features || !features.features || features.features.length === 0) return;
+          
+          const coords = features.features.flatMap(f=>{
+            const g=f.geometry;if(!g)return[];
+            if(g.type==='Polygon') return g.coordinates.flat();
+            if(g.type==='MultiPolygon') return g.coordinates.flat(2);
+            if(g.type==='LineString') return g.coordinates;
+            if(g.type==='MultiLineString') return g.coordinates.flat();
+            return[];
+          });
+          if(coords.length===0) return;
+          
+          const lons = coords.map(c=>c[0]), lats = coords.map(c=>c[1]);
+          const bounds = [[Math.min(...lons),Math.min(...lats)], [Math.max(...lons),Math.max(...lats)]];
+          map.fitBounds(bounds,{padding:60,maxZoom:19});
+        }
+        
+        // Fit to data
+        console.log('Fitting map to data...');
+        fitToData(boundaryGeo);
+        fitToData(buildingsGeo);
+        fitToData(lineGeo);
+        
+        console.log('Map setup complete!');
+        
+      } catch (error) {
+        console.error('Error setting up layers:', error);
+      }
+    });
+
+    map.on('error', function(e) {
+      console.error('Map error:', e);
+    });
+
+  } catch (error) {
+    console.error('Error initializing map:', error);
+  }
+})();
+</script>
+</body>
+</html>
